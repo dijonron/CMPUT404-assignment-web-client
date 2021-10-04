@@ -39,11 +39,17 @@ class HTTPResponse(object):
 class HTTPClient(object):
     def get_host_port(self, url):
         netloc = url.netloc
-        return netloc.split(':')
+        try:
+            host, port = netloc.split(':')
+        except:
+            host = netloc
+            port = '80'
+        return host, port
 
     def connect(self, host, port):
+        host_ip = socket.gethostbyname(host)
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.connect((host, int(port)))
+        self.socket.connect((host_ip, int(port)))
         return None
 
     def get_code(self, data):
@@ -76,13 +82,30 @@ class HTTPClient(object):
             else:
                 done = not part
         return buffer.decode('utf-8')
+    
+    def build_GET_header(self, path, host, port, query=None):
+        if not path:
+            path = '/'
+        if query:
+            request_line = 'GET %s HTTP/1.1\r\n' % '?'.join([path, query])
+        else:
+            request_line = 'GET %s HTTP/1.1\r\n' % path
+        if port != 80:
+            host_line = 'Host: %s\r\n' % host
+        else:
+            host_line = 'Host: %s:%s\r\n' % (host, port)
+        user_agent = 'User-Agent: agent/0.0.7\r\n'
+        accept = 'Accept: */*\r\n'
+        connection = 'Connection: close\r\n'
+        return request_line + host_line + user_agent + accept + connection + '\r\n'
 
     def GET(self, url, args=None):
         parsed_url = urllib.parse.urlparse(url)
         host, port = self.get_host_port(parsed_url)
         path = parsed_url.path
+        query = parsed_url.query
         self.connect(host, port)
-        self.sendall(data="GET %s HTTP/1.1\r\nHost: %s:%s\r\n\r\n" % (path, host, port)) # TODO: proper header
+        self.sendall(data=self.build_GET_header(path, host, port, query))
         data = self.recvall(self.socket)
         headers = self.get_headers(data)
         code = self.get_code(headers)
@@ -90,13 +113,39 @@ class HTTPClient(object):
         self.close()
         return HTTPResponse(code, body)
 
+    def build_POST_header(self, path, host, port, length=0):
+        if not path:
+            path = '/'
+        request_line = 'POST %s HTTP/1.1\r\n' % path
+        if port != 80:
+            host_line = 'Host: %s\r\n' % host
+        else:
+            host_line = 'Host: %s:%s\r\n' % (host, port)
+        user_agent = 'User-Agent: agent/0.0.7\r\n'
+        accept = 'Accept: */*\r\n'
+        connection = 'Connection: close\r\n'
+        content_type = 'Content-Type: application/x-www-form-urlencoded\r\n'
+        content_length = 'Content-length: %s\r\n' % length
+        return request_line + host_line + user_agent + accept + connection + content_type + content_length + '\r\n'
+
+    def build_POST_body(self, args=None):
+        body = bytearray()
+        if args:
+            for arg in args:
+                body.extend(arg.encode('utf-8'))
+                body.extend('='.encode('utf-8'))
+                body.extend(args[arg].encode('utf-8'))
+                body.extend('&'.encode('utf-8'))
+            body = body[:-1]
+        return body
+
     def POST(self, url, args=None):
         parsed_url = urllib.parse.urlparse(url)
-        print(parsed_url)
+        req_body = self.build_POST_body(args).decode()
         host, port = self.get_host_port(parsed_url)
         path = parsed_url.path
         self.connect(host, port)
-        self.sendall(data="POST %s HTTP/1.1\r\nHost: %s:%s\r\n\r\n" % (path, host, port)) # TODO: proper header
+        self.sendall(data=self.build_POST_header(path, host, port, len(req_body)) + req_body)
         data = self.recvall(self.socket)
         headers = self.get_headers(data)
         code = self.get_code(headers)
